@@ -9,8 +9,9 @@ import * as openai from "@livekit/agents-plugin-openai";
 import * as silero from "@livekit/agents-plugin-silero";
 import { fileURLToPath } from "node:url";
 import { LangGraphAgent } from "./runtime.mjs";
-import { graph } from "./graph.mjs";
 import { randomUUID } from "node:crypto";
+
+import { graph } from "../examples/graph.mjs";
 
 export default {
   prewarm: async (proc: JobProcess) => {
