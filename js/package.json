@@ -1,0 +1,23 @@
+{
+  "name": "agent-livekit",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "@langchain/core": "^0.3.43",
+    "@langchain/langgraph": "^0.2.59",
+    "@langchain/openai": "^0.5.0",
+    "@livekit/agents": "^0.7.1",
+    "@livekit/agents-plugin-deepgram": "^0.5.4",
+    "@livekit/agents-plugin-openai": "^0.9.0",
+    "@livekit/agents-plugin-silero": "^0.5.5",
+    "@livekit/rtc-node": "^0.13.8",
+    "@livekit/typed-emitter": "^3.0.0",
+    "prompts": "^2.4.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/prompts": "^2.4.9"
+  }
+}
