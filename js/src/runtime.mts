@@ -1,79 +1,79 @@
-import { llm, tts } from "@livekit/agents";
+import { llm } from "@livekit/agents";
 import {
   AIMessageChunk,
   BaseMessageChunk,
-  BaseMessageLike,
-  MessageContent,
-  MessageContentComplex,
-  MessageType,
+  type MessageContent,
+  type MessageContentComplex,
+  type MessageType,
 } from "@langchain/core/messages";
-import { RunnableConfig } from "@langchain/core/runnables";
-import { pipeline } from "@livekit/agents";
 import {
   Command,
-  CompiledGraph,
-  LangGraphRunnableConfig,
-  MemorySaver,
+  isGraphInterrupt,
+  type LangGraphRunnableConfig,
+  type Pregel,
 } from "@langchain/langgraph";
 
-type VoiceEvent = { type: "say"; data: { source: string } } | { type: "flush" };
+type VoiceEvent = { type: "say"; data: { source: string } };
+type AnyPregelInterface = Pick<
+  Pregel<any, any, any>,
+  "invoke" | "stream" | "getState"
+>;
 
-const saver = new MemorySaver();
-
-type AnyCompiledGraph = CompiledGraph<any, any, any, any, any, any>;
+interface LangGraphOptions {
+  configurable?: LangGraphRunnableConfig["configurable"];
+  messageKey?: string;
+}
 
 class LangGraphStream extends llm.LLMStream {
   label = "langgraph.LangGraphStream";
 
-  #graph: AnyCompiledGraph;
-  #controller: AbortController;
-  #configurable: LangGraphRunnableConfig["configurable"];
+  #graph: AnyPregelInterface;
+  #options: LangGraphOptions;
 
   constructor(
     llm: llm.LLM,
-    graph: AnyCompiledGraph,
+    graph: AnyPregelInterface,
     chatCtx: llm.ChatContext,
     fncCtx: llm.FunctionContext,
-    options?: {
-      flush?: () => void;
-      configurable: LangGraphRunnableConfig["configurable"];
-    }
+    options: LangGraphOptions
   ) {
     super(llm, chatCtx, {});
     this.#graph = graph;
-
-    this.#controller = new AbortController();
-    this.#configurable = options?.configurable;
-
-    // set the checkpointer to the saver, but now we need to set the thread_id everywhere
-    this.#graph.checkpointer ??= saver;
+    this.#options = options;
 
     this.#run();
   }
 
   async #getInterrupt() {
-    const state = await this.#graph.getState({
-      configurable: this.#configurable,
-    });
+    if (!this.#options?.configurable) return undefined;
+    try {
+      const state = await this.#graph.getState({
+        configurable: this.#options?.configurable,
+      });
 
-    const interrupts = state.tasks.flatMap((task) => task.interrupts);
-    const [interrupt] = interrupts
-      .reverse()
-      .filter((interrupt) => typeof interrupt.value === "string");
+      const interrupts = state.tasks.flatMap((task) => task.interrupts);
+      const [interrupt] = interrupts
+        .reverse()
+        .filter((interrupt) => typeof interrupt.value === "string");
 
-    return interrupt;
+      return interrupt;
+    } catch {
+      return undefined;
+    }
   }
 
   async #run() {
     // push to queue to prevent ttft being undefined when sending metrics
     this.queue.put({ requestId: "<unknown>", choices: [] });
 
-    const messages = await Promise.all(this.chatCtx.messages.map(toMessage));
+    const messages = await Promise.all(
+      this.chatCtx.messages.map(toLangChainMessage)
+    );
     const interrupt = await this.#getInterrupt();
 
     // check if we're interrupted, if so, send continue instead
-    let input: { messages: BaseMessageLike | BaseMessageLike[] } | Command = {
-      messages,
+    let input: unknown | Command = {
+      [this.#options?.messageKey ?? "messages"]: messages,
     };
 
     if (interrupt) {
@@ -92,28 +92,35 @@ class LangGraphStream extends llm.LLMStream {
     }
 
     try {
-      for await (const payload of await this.#graph.stream(input, {
-        signal: this.#controller.signal,
-        configurable: this.#configurable,
-        streamMode: ["messages", "custom"],
-      })) {
-        const [event, data] = payload;
-        if (event === "messages") {
-          const [message] = data as [BaseMessageChunk, RunnableConfig];
-          const chunk = await toLkChunk(message);
-          if (chunk) this.queue.put(chunk);
-        } else if (event === "custom") {
-          const event = data as VoiceEvent;
-          if (event.type === "say") {
-            const lkChunk = await toLkChunk(
-              new AIMessageChunk({ content: event.data.source })
-            );
-            if (lkChunk) this.queue.put(lkChunk);
-          } else if (event.type === "flush") {
-            // @ts-expect-error Flushing sentinel
-            this.queue.put(tts.SynthesizeStream.FLUSH_SENTINEL);
+      // We need to wrap it in a second try/catch
+      // in order to serve both RemoteGraph and StateGraph
+      // RemoteGraph will throw an error if interrupted,
+      // whereas StateGraph will not.
+      try {
+        for await (const payload of await this.#graph.stream(input, {
+          configurable: this.#options?.configurable,
+          streamMode: ["messages", "custom"],
+        })) {
+          const [event, data] = payload;
+          if (event === "messages") {
+            const [message] = data as [
+              BaseMessageChunk,
+              LangGraphRunnableConfig
+            ];
+            const chunk = await toLkChunk(message);
+            if (chunk) this.queue.put(chunk);
+          } else if (event === "custom") {
+            const event = data as VoiceEvent;
+            if (event.type === "say") {
+              const lkChunk = await toLkChunk(
+                new AIMessageChunk({ content: event.data.source })
+              );
+              if (lkChunk) this.queue.put(lkChunk);
+            }
           }
         }
+      } catch (err) {
+        if (!isGraphInterrupt(err)) throw err;
       }
 
       // check the state again if we were interrupted
@@ -128,9 +135,27 @@ class LangGraphStream extends llm.LLMStream {
       this.queue.close();
     }
   }
+}
 
-  abort() {
-    this.#controller.abort();
+export class LangGraphAdapter extends llm.LLM {
+  #graph: AnyPregelInterface;
+  #options: LangGraphOptions | undefined;
+
+  constructor(graph: AnyPregelInterface, options?: LangGraphOptions) {
+    super();
+    this.#graph = graph;
+    this.#options = options;
+  }
+
+  chat(params: {
+    chatCtx: llm.ChatContext;
+    fncCtx: llm.FunctionContext;
+  }): llm.LLMStream {
+    const { chatCtx, fncCtx } = params;
+    return new LangGraphStream(this, this.#graph, chatCtx, fncCtx, {
+      configurable: this.#options?.configurable,
+      messageKey: this.#options?.messageKey,
+    });
   }
 }
 
@@ -138,7 +163,7 @@ function isLkChatImage(i: llm.ChatContent): i is llm.ChatImage {
   return typeof i === "object" && "image" in i && i.image != null;
 }
 
-async function toMessage(m: llm.ChatMessage): Promise<{
+async function toLangChainMessage(m: llm.ChatMessage): Promise<{
   id: string | undefined;
   type: MessageType;
   content: MessageContent;
@@ -165,10 +190,14 @@ async function toMessage(m: llm.ChatMessage): Promise<{
             return { type: "image_url", image_url: c.image };
           }
 
-          throw new Error("Unsupported image type");
+          throw new Error(
+            `Unsupported LiveKit image type: ${JSON.stringify(c)}`
+          );
         }
 
-        throw new Error("Unsupported content type");
+        throw new Error(
+          `Unsupported LiveKit content type: ${JSON.stringify(c)}`
+        );
       })
     );
   }
@@ -184,70 +213,4 @@ async function toLkChunk(m: BaseMessageChunk): Promise<llm.ChatChunk | null> {
       { delta: { content: m.content, role: llm.ChatRole.ASSISTANT }, index: 0 },
     ],
   };
-}
-
-export class LangGraph extends llm.LLM {
-  #graph: AnyCompiledGraph;
-  #config: Pick<LangGraphRunnableConfig, "configurable">;
-  constructor(
-    graph: AnyCompiledGraph,
-    config: Pick<LangGraphRunnableConfig, "configurable">
-  ) {
-    super();
-    this.#graph = graph;
-    this.#config = config;
-  }
-
-  chat(params: {
-    chatCtx: llm.ChatContext;
-    fncCtx: llm.FunctionContext;
-    signal: AbortSignal;
-    say?: (
-      source: string,
-      allowInterruptions: boolean,
-      addToChatCtx: boolean
-    ) => void;
-  }): llm.LLMStream {
-    const { chatCtx, fncCtx, ...options } = params;
-    return new LangGraphStream(this, this.#graph, chatCtx, fncCtx, {
-      configurable: this.#config.configurable,
-      ...options,
-    });
-  }
-}
-
-type VAD = ConstructorParameters<typeof pipeline.VoicePipelineAgent>[0];
-type STT = ConstructorParameters<typeof pipeline.VoicePipelineAgent>[1];
-type TTS = ConstructorParameters<typeof pipeline.VoicePipelineAgent>[3];
-
-type VoicePipelineAgentOptions = ConstructorParameters<
-  typeof pipeline.VoicePipelineAgent
->[4] &
-  Pick<LangGraphRunnableConfig, "configurable">;
-
-export class LangGraphAgent extends pipeline.VoicePipelineAgent {
-  constructor(
-    vad: VAD,
-    stt: STT,
-    graph: AnyCompiledGraph,
-    tts: TTS,
-    opts: VoicePipelineAgentOptions
-  ) {
-    const llm = new LangGraph(graph, opts);
-    const beforeLLMCallback: pipeline.BeforeLLMCallback = (agent, chatCtx) => {
-      const signal = new AbortController();
-      agent.once(pipeline.VPAEvent.AGENT_SPEECH_INTERRUPTED, () =>
-        signal.abort()
-      );
-
-      return (agent.llm as LangGraph).chat({
-        chatCtx,
-        fncCtx: agent.fncCtx ?? {},
-        signal: signal.signal,
-        say: agent.say.bind(agent),
-      });
-    };
-
-    super(vad, stt, llm, tts, { ...opts, beforeLLMCallback });
-  }
 }
