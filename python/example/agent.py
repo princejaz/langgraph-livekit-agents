@@ -9,21 +9,9 @@ from langchain_openai.chat_models import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 from langgraph.types import StreamWriter
+from langgraph_livekit_agents.types import TypedLivekit
 
 logger = logging.getLogger(__name__)
-
-
-class TypedLivekit:
-    writer: StreamWriter
-
-    def __init__(self, writer: StreamWriter):
-        self.writer = writer
-
-    def say(self, content: str):
-        self.writer({"type": "say", "data": {"content": content}})
-
-    def flush(self):
-        self.writer({"type": "flush", "data": None})
 
 
 class AgentState(TypedDict):

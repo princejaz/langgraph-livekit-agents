@@ -1,20 +1,8 @@
 import { ChatOpenAI } from "@langchain/openai";
-import { LangGraphRunnableConfig, StateGraph } from "@langchain/langgraph";
-import { MessagesAnnotation, interrupt } from "@langchain/langgraph";
+import { StateGraph } from "@langchain/langgraph";
+import { MessagesAnnotation } from "@langchain/langgraph";
 
-const typedLiveKit = (config: LangGraphRunnableConfig) => ({
-  say: (source: string) => config.writer?.({ type: "say", data: { source } }),
-  interrupt: interrupt<
-    string,
-    {
-      content: string;
-      messages: [
-        { type: "ai"; content: string },
-        { type: "human"; content: string }
-      ];
-    }
-  >,
-});
+import { typedLiveKit } from "../src/types.mjs";
 
 export const graph = new StateGraph(MessagesAnnotation)
   .addNode("agent", async (state, config) => {

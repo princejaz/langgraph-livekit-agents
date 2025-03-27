@@ -35,6 +35,7 @@ pnpm run voice
 import { LangGraphAdapter } from "./src/runtime.mts";
 import { RemoteGraph } from "@langchain/langgraph/remote";
 
+// Can either be a local compiled graph or a deployed graph
 const graph = new RemoteGraph({
   graphId: "agent",
   url: "http://localhost:2024",
@@ -52,11 +53,38 @@ const agent = new pipeline.VoicePipelineAgent(
 
 The LangGraph LiveKit adapter is a wrapper around `llm.LLM`, that maps the LangGraph `messages` stream mode to LiveKit's voice chunks.
 
-The sample also provides utilities for implementing human-in-the-loop-style interrupts and manual `say()` method for playing static messages, built on top of LangGraph's `custom` stream mode.
+The sample provides several key features:
+
+1. **Interrupts**: Implement human-in-the-loop-style interrupts using LangGraph's `custom` stream mode. This allows the agent to pause and wait for user input at specific points in the conversation.
+
+2. **Manual Voice Speakout**: Use the `say()` method to play static messages or announcements at any point in the conversation.
+
+Here's an example of using these features:
 
 ```typescript
-const liveKit = typedLiveKit(config);
-const name = liveKit.interrupt("What is your name?");
+import { typedLiveKit } from "./src/types.mjs";
 
+const liveKit = typedLiveKit(config);
+
+// Using interrupts to get user input
+const { content, messages } = liveKit.interrupt("What is your name?");
+
+// Manual voice speakout
 liveKit.say("Give me a second to think...");
+```
+
+`LangGraphAdapter` supports both graphs deployed in LangGraph Platform and standalone graphs running within LiveKit Agents worker, just swap the `RemoteGraph` with your compiled graph.
+
+```typescript
+import { LangGraphAdapter } from "./src/runtime.mts";
+import { StateGraph } from "@langchain/langgraph";
+
+const graph = new StateGraph(...).compile();
+
+const agent = new pipeline.VoicePipelineAgent(
+  vad,
+  openai.STT.withGroq({ model: "whisper-large-v3-turbo" }),
+  new LangGraphAdapter(graph),
+  new openai.TTS()
+);
 ```
