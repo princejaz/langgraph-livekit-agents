@@ -1,9 +1,9 @@
 [project]
-name = "agent-livekit"
-version = "0.1.0"
-description = "Add your description here"
+name = "langgraph-livekit-agents"
+version = "0.0.1"
+description = "LiveKit LangGraph adapter"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "langchain-community>=0.3.15",
     "langchain-openai>=0.3.1",

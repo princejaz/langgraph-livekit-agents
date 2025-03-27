@@ -1,25 +1,20 @@
 """
-Here's a very basic sample of implementing LangGraph into LiveKit agents.
-
-LangGraph masquerades as an livekit.LLM and translates the LiveKit chat chunks
+LangGraphAdapter masquerades as an livekit.LLM and translates the LiveKit chat chunks
 into LangGraph messages.
 """
 
 from typing import Any, Optional, Dict
 from livekit.agents import llm
-from langgraph.pregel import Pregel
+from langgraph.pregel import PregelProtocol
 from langchain_core.messages import BaseMessageChunk, AIMessage, HumanMessage
 from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.tts import SynthesizeStream
 from livekit.agents.utils import shortuuid
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
 import logging
 
 logger = logging.getLogger(__name__)
-
-checkpointer = MemorySaver()
 
 
 # https://github.com/livekit/agents/issues/1370#issuecomment-2588821571
@@ -33,7 +28,7 @@ class LangGraphStream(llm.LLMStream):
         self,
         llm: llm.LLM,
         chat_ctx: llm.ChatContext,
-        graph: Pregel,
+        graph: PregelProtocol,
         fnc_ctx: Optional[Dict] = None,
         conn_options: APIConnectOptions = None,
     ):
@@ -41,7 +36,6 @@ class LangGraphStream(llm.LLMStream):
             llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
         )
         self._graph = graph
-        self._graph.checkpointer = checkpointer
 
     async def _run(self):
         # Change 1) Instead of converting all messages, we just now take the last human message
@@ -156,7 +150,7 @@ class LangGraphStream(llm.LLMStream):
         return LangGraphStream._create_livekit_chunk(content, id=request_id)
 
 
-class LangGraph(llm.LLM):
+class LangGraphAdapter(llm.LLM):
     def __init__(self, graph: Any, config: dict[str, Any] | None = None):
         super().__init__()
         self._graph = graph

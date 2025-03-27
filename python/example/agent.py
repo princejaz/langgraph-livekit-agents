@@ -38,7 +38,7 @@ async def human(state: AgentState) -> AgentState:
 
 
 async def weather(state: AgentState) -> AgentState:
-    response = await ChatOpenAI(model="gpt-4o-mini").ainvoke(
+    response = await ChatOpenAI(model="gpt-4-turbo-preview").ainvoke(
         [HumanMessage(content="Tell me a random weather fact")]
     )
 
@@ -47,7 +47,7 @@ async def weather(state: AgentState) -> AgentState:
 
 
 async def other(state: AgentState) -> AgentState:
-    response = await ChatOpenAI(model="gpt-4o-mini").ainvoke(
+    response = await ChatOpenAI(model="gpt-4-turbo-preview").ainvoke(
         [HumanMessage(content=state["messages"][-1].content)]
     )
 
@@ -62,7 +62,7 @@ async def supervisor(state: AgentState) -> Command[Literal["weather", "other"]]:
         ]
 
     response = await (
-        ChatOpenAI(model="gpt-4o-mini")
+        ChatOpenAI(model="gpt-4-turbo-preview")
         .with_structured_output(RouterOutput)
         .with_config(tags=[TAG_NOSTREAM])
     ).ainvoke([HumanMessage(content=state["messages"][-1].content)])
