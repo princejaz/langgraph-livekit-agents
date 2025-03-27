@@ -1,5 +1,5 @@
 import logging
-from uuid import uuid4
+from uuid import uuid4, uuid5, UUID
 from dotenv import load_dotenv
 from livekit.agents import (
     AutoSubscribe,
@@ -10,11 +10,18 @@ from livekit.agents import (
     pipeline,
 )
 from livekit.plugins import openai, deepgram, silero
-from langgraph_livekit_agents.runtime import LangGraph
-from agent import graph
+from langgraph_livekit_agents.runtime import LangGraphAdapter
+from langgraph.pregel.remote import RemoteGraph
 
 load_dotenv(dotenv_path=".env")
 logger = logging.getLogger("voice-agent")
+
+
+def get_thread_id(sid: str | None) -> str:
+    NAMESPACE = UUID("41010b5d-5447-4df5-baf2-97d69f2e9d06")
+    if sid is not None:
+        return str(uuid5(NAMESPACE, sid))
+    return str(uuid4())
 
 
 def prewarm(proc: JobProcess):
@@ -26,18 +33,20 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
     participant = await ctx.wait_for_participant()
-    logger.info(f"starting voice assistant for participant {participant.identity}")
+    thread_id = get_thread_id(participant.sid)
 
-    thread_id = participant.sid or str(uuid4())
+    logger.info(
+        f"starting voice assistant for participant {participant.identity} (thread ID: {thread_id})"
+    )
 
+    graph = RemoteGraph("agent", url="http://localhost:2024")
     agent = pipeline.VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(),
-        llm=LangGraph(graph, config={"configurable": {"thread_id": thread_id}}),
+        llm=LangGraphAdapter(graph, config={"configurable": {"thread_id": thread_id}}),
         tts=openai.TTS(),
     )
 
-    agent.once("agent_speech_interrupted", lambda evt: logger.info("interrupted"))
     agent.start(ctx.room, participant)
 
 

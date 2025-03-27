@@ -7,10 +7,23 @@ from langgraph.graph import StateGraph, add_messages
 from langgraph.types import Command
 from langchain_openai.chat_models import ChatOpenAI
 from langchain_core.messages import HumanMessage
-from langchain_core.callbacks.manager import adispatch_custom_event
 from langgraph.types import interrupt
+from langgraph.types import StreamWriter
 
 logger = logging.getLogger(__name__)
+
+
+class TypedLivekit:
+    writer: StreamWriter
+
+    def __init__(self, writer: StreamWriter):
+        self.writer = writer
+
+    def say(self, content: str):
+        self.writer({"type": "say", "data": {"content": content}})
+
+    def flush(self):
+        self.writer({"type": "flush", "data": None})
 
 
 class AgentState(TypedDict):
@@ -19,16 +32,9 @@ class AgentState(TypedDict):
     content: Optional[str]
 
 
-async def say(content: str):
-    await adispatch_custom_event("say", {"content": content})
-
-
-async def flush():
-    await adispatch_custom_event("flush", None)
-
-
-async def human(state: AgentState) -> AgentState:
-    await say("This is a human node")
+async def human(state: AgentState, writer: StreamWriter) -> AgentState:
+    livekit = TypedLivekit(writer)
+    livekit.say("This is a human node")
 
     title, title_msgs = interrupt("What is the title of the article?")
     content, content_msgs = interrupt("What is the content of the article?")
@@ -38,7 +44,7 @@ async def human(state: AgentState) -> AgentState:
 
 
 async def weather(state: AgentState) -> AgentState:
-    response = await ChatOpenAI(model="gpt-4-turbo-preview").ainvoke(
+    response = await ChatOpenAI(model="gpt-4o-mini").ainvoke(
         [HumanMessage(content="Tell me a random weather fact")]
     )
 
@@ -47,7 +53,7 @@ async def weather(state: AgentState) -> AgentState:
 
 
 async def other(state: AgentState) -> AgentState:
-    response = await ChatOpenAI(model="gpt-4-turbo-preview").ainvoke(
+    response = await ChatOpenAI(model="gpt-4o-mini").ainvoke(
         [HumanMessage(content=state["messages"][-1].content)]
     )
 
@@ -55,21 +61,24 @@ async def other(state: AgentState) -> AgentState:
     return {"messages": response}
 
 
-async def supervisor(state: AgentState) -> Command[Literal["weather", "other"]]:
+async def supervisor(
+    state: AgentState, writer: StreamWriter
+) -> Command[Literal["weather", "other"]]:
+    livekit = TypedLivekit(writer)
+
     class RouterOutput(TypedDict):
         next_step: Annotated[
             Literal["weather", "other"], ..., "Classify the user request"
         ]
 
     response = await (
-        ChatOpenAI(model="gpt-4-turbo-preview")
+        ChatOpenAI(model="gpt-4o-mini")
         .with_structured_output(RouterOutput)
         .with_config(tags=[TAG_NOSTREAM])
     ).ainvoke([HumanMessage(content=state["messages"][-1].content)])
 
     # Send a flush event to send directly to TTS
-    await flush()
-
+    livekit.flush()
     logger.info(f"supervisor: {response}")
 
     if response["next_step"] == "weather":
@@ -85,4 +94,5 @@ builder.add_node(weather)
 builder.add_node(other)
 builder.set_entry_point("human")
 builder.add_edge("human", "supervisor")
+
 graph = builder.compile()

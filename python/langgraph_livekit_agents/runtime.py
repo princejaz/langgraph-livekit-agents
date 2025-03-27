@@ -11,6 +11,8 @@ from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.tts import SynthesizeStream
 from livekit.agents.utils import shortuuid
 from langgraph.types import Command
+from langgraph.errors import GraphInterrupt
+from httpx import HTTPStatusError
 
 import logging
 
@@ -60,23 +62,26 @@ class LangGraphStream(llm.LLMStream):
 
             input = Command(resume=(input_human_message.content, used_messages))
 
-        async for event in self._graph.astream_events(
-            input, version="v2", config=self._llm._config
-        ):
-            if event["event"] == "on_chat_model_stream":
-                message: BaseMessageChunk = event["data"]["chunk"]
-                if chunk := await self._to_livekit_chunk(message):
-                    self._event_ch.send_nowait(chunk)
-
-            if event["event"] == "on_custom_event" and (
-                event["name"] == "say" or event["name"] == "flush"
+        try:
+            async for mode, data in self._graph.astream(
+                input, config=self._llm._config, stream_mode=["messages", "custom"]
             ):
-                if event["name"] == "say":
-                    if chunk := await self._to_livekit_chunk(event["data"]["content"]):
+                if mode == "messages":
+                    if chunk := await self._to_livekit_chunk(data[0]):
                         self._event_ch.send_nowait(chunk)
 
-                # flush even after a say
-                self._event_ch.send_nowait(self._create_livekit_chunk(FlushSentinel()))
+                if mode == "custom":
+                    if isinstance(data, dict) and (event := data.get("type")):
+                        if event == "say" or event == "flush":
+                            content = (data.get("data") or {}).get("content")
+                            if chunk := await self._to_livekit_chunk(content):
+                                self._event_ch.send_nowait(chunk)
+
+                            self._event_ch.send_nowait(
+                                self._create_livekit_chunk(FlushSentinel())
+                            )
+        except GraphInterrupt:
+            pass
 
         # If interrupted, send the string as a message
         if interrupt := await self._get_interrupt():
@@ -84,19 +89,22 @@ class LangGraphStream(llm.LLMStream):
                 self._event_ch.send_nowait(chunk)
 
     async def _get_interrupt(cls) -> Optional[str]:
-        state = await cls._graph.aget_state(config=cls._llm._config)
-        interrupts = [
-            interrupt for task in state.tasks for interrupt in task.interrupts
-        ]
-        assistant = next(
-            (
-                interrupt
-                for interrupt in reversed(interrupts)
-                if isinstance(interrupt.value, str)
-            ),
-            None,
-        )
-        return assistant
+        try:
+            state = await cls._graph.aget_state(config=cls._llm._config)
+            interrupts = [
+                interrupt for task in state.tasks for interrupt in task.interrupts
+            ]
+            assistant = next(
+                (
+                    interrupt
+                    for interrupt in reversed(interrupts)
+                    if isinstance(interrupt.value, str)
+                ),
+                None,
+            )
+            return assistant
+        except HTTPStatusError as e:
+            return None
 
     def _to_message(cls, msg: llm.ChatMessage) -> HumanMessage:
         if isinstance(msg.content, str):
@@ -146,6 +154,9 @@ class LangGraphStream(llm.LLMStream):
         elif hasattr(msg, "content") and isinstance(msg.content, str):
             request_id = getattr(msg, "id", None)
             content = msg.content
+        elif isinstance(msg, dict):
+            request_id = msg.get("id")
+            content = msg.get("content")
 
         return LangGraphStream._create_livekit_chunk(content, id=request_id)
 
