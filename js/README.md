@@ -1,4 +1,4 @@
-# LangGraph LiveKit Agents - JavaScript Implementation
+# LangGraph.js x LiveKit Agents
 
 This is the JavaScript implementation of LangGraph LiveKit Agents, which enables building voice-enabled AI agents using LangGraph and LiveKit.
 

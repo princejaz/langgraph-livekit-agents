@@ -10,7 +10,7 @@ from livekit.agents import (
     pipeline,
 )
 from livekit.plugins import openai, deepgram, silero
-from langgraph_livekit_agents.runtime import LangGraphAdapter
+from langgraph_livekit_agents import LangGraphAdapter
 from langgraph.pregel.remote import RemoteGraph
 
 load_dotenv(dotenv_path=".env")
