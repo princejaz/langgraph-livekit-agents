@@ -4,6 +4,7 @@ into LangGraph messages.
 """
 
 from typing import Any, Optional, Dict
+
 from livekit.agents import llm
 from langgraph.pregel import PregelProtocol
 from langchain_core.messages import BaseMessageChunk, AIMessage, HumanMessage
@@ -31,11 +32,10 @@ class LangGraphStream(llm.LLMStream):
         llm: llm.LLM,
         chat_ctx: llm.ChatContext,
         graph: PregelProtocol,
-        fnc_ctx: Optional[Dict] = None,
         conn_options: APIConnectOptions = None,
     ):
         super().__init__(
-            llm, chat_ctx=chat_ctx, fnc_ctx=fnc_ctx, conn_options=conn_options
+            llm, chat_ctx=chat_ctx, conn_options=conn_options
         )
         self._graph = graph
 
@@ -170,13 +170,11 @@ class LangGraphAdapter(llm.LLM):
     def chat(
         self,
         chat_ctx: llm.ChatContext,
-        fnc_ctx: llm.FunctionContext,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> llm.LLMStream:
         return LangGraphStream(
             self,
             chat_ctx=chat_ctx,
             graph=self._graph,
-            fnc_ctx=fnc_ctx,
             conn_options=conn_options,
         )
